@@ -1,125 +1,134 @@
 #include <Arduino.h>
 #include <WiFi.h>
-#include <WiFiUdp.h>
-#include <esp_wifi.h>
-#include <esp_system.h>
+#include <esp_now.h>
 #include <nvs_flash.h>
+#include <esp_wifi.h>
 
-// Wi-Fi credentials
-const char* WIFI_SSID = "IoT_H3/4";
-const char* WIFI_PASS = "98806829";
+// Replace with your Wi-Fi credentials
+#define WIFI_SSID  "IoT_H3/4"
+#define WIFI_PASS  "98806829"
 
-// Aggregator server details
-IPAddress aggregatorIP(192, 168, 1, 100);
-const uint16_t AGGREGATOR_PORT = 5005;
+// Heartbeat interval in milliseconds
+#define HEARTBEAT_INTERVAL 2000
 
-// MAC address of the tag device to track
-static const uint8_t tag_mac[6] = {0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF};
-// (Replace with actual tag MAC)
-
-// Sniffing channel (must match tag TX channel)
-#define SNIFF_CHANNEL 1
-
-WiFiUDP udp;
-uint8_t self_mac[6];
-
-// Packet header for JSON payload
-struct Payload {
-  uint8_t anchor_mac[6];
-  int16_t rssi;
-  unsigned long ts;
+// List of all ESP32 MAC addresses in the mesh
+static const uint8_t mesh_macs[][6] = {
+  {0xE8, 0x6B, 0xEA, 0xD4, 0x30, 0x34}, // Device A
+  {0xEC, 0x64, 0xC9, 0x85, 0x72, 0xC0}, // Device B
+  {0x0C, 0x8B, 0x95, 0x76, 0xAD, 0x20}  // Device C
 };
 
-// Promiscuous packet callback
-void snifferCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
-  if (type != WIFI_PKT_DATA) return;
-  wifi_promiscuous_pkt_t *pkt = (wifi_promiscuous_pkt_t*)buf;
-  // parse 802.11 header
-  const uint8_t *frame = pkt->payload;
-  const uint8_t *src = frame + 10; // addr2 offset in MAC header
-  if (memcmp(src, tag_mac, 6) != 0) return;
+// Self MAC address
+static uint8_t self_mac[6];
+// Number of peers in mesh
+static const size_t NUM_PEERS = sizeof(mesh_macs) / sizeof(mesh_macs[0]);
 
-  // fill payload
-  Payload p;
-  memcpy(p.anchor_mac, self_mac, 6);
-  p.rssi = pkt->rx_ctrl.rssi;
-  p.ts = millis();
+// Heartbeat payload structure
+typedef struct {
+  uint32_t ts;
+} Heartbeat;
 
-  // send via UDP as JSON
-  char json[128];
-  snprintf(json, sizeof(json), "{\"anchor\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"rssi\":%d,\"ts\":%lu}",
-           p.anchor_mac[0],p.anchor_mac[1],p.anchor_mac[2],
-           p.anchor_mac[3],p.anchor_mac[4],p.anchor_mac[5],
-           p.rssi, p.ts);
-
-  // Begin UDP packet
-  if (udp.beginPacket(aggregatorIP, AGGREGATOR_PORT) != 1) {
-    Serial.println("Error: UDP beginPacket failed");
-    return;
-  }
-  udp.write((uint8_t*)json, strlen(json));
-  int res = udp.endPacket();
-  if (res == 1) {
-    Serial.println("Confirmation: Data sent to aggregator");
-  } else {
-    Serial.println("Error: UDP endPacket failed");
-  }
+// Callback invoked when a send completes
+void onSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
+  char macStr[18];
+  snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
+           mac_addr[0], mac_addr[1], mac_addr[2],
+           mac_addr[3], mac_addr[4], mac_addr[5]);
+  Serial.printf("[Send] To %s -> %s\n", macStr,
+                status == ESP_NOW_SEND_SUCCESS ? "Success" : "Fail");
 }
 
-void connectWiFi() {
-  Serial.printf("Connecting to %s...\n", WIFI_SSID);
-  WiFi.mode(WIFI_MODE_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print('.');
+// Callback invoked when data is received
+void onRecv(const uint8_t *mac_addr, const uint8_t *data, int len) {
+  char macStr[18];
+  snprintf(macStr, sizeof(macStr), "%02x:%02x:%02x:%02x:%02x:%02x",
+           mac_addr[0], mac_addr[1], mac_addr[2],
+           mac_addr[3], mac_addr[4], mac_addr[5]);
+  if (len == sizeof(Heartbeat)) {
+    Heartbeat hb;
+    memcpy(&hb, data, len);
+    Serial.printf("[Recv] From %s @ ts=%lu\n", macStr, hb.ts);
+  } else {
+    Serial.printf("[Recv] %d bytes from %s\n", len, macStr);
   }
-  Serial.println("\nWi-Fi connected");
-  WiFi.setAutoReconnect(true);
 }
 
 void setup() {
   Serial.begin(115200);
   delay(100);
 
-  // init NVS (required for Wi-Fi)
-  nvs_flash_init();
+  // Initialize NVS
+  esp_err_t err = nvs_flash_init();
+  if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+    ESP_ERROR_CHECK(nvs_flash_erase());
+    err = nvs_flash_init();
+  }
+  ESP_ERROR_CHECK(err);
 
-  // get own MAC
+  // Connect to Wi-Fi (optional, for logging)
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  Serial.printf("Connecting to Wi-Fi '%s'", WIFI_SSID);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print('.');
+  }
+  Serial.println(" Connected!");
+
+    // Determine and set channel for ESP-NOW to match Wi-Fi AP channel
+uint8_t primary_chan = 1;
+wifi_second_chan_t secondary_chan = WIFI_SECOND_CHAN_NONE;
+esp_wifi_get_channel(&primary_chan, &secondary_chan);
+Serial.printf("Using channel %d for ESP-NOW\n", primary_chan);
+esp_wifi_set_channel(primary_chan, WIFI_SECOND_CHAN_NONE);
+
+  // Read and log own MAC address
   esp_read_mac(self_mac, ESP_MAC_WIFI_STA);
-  Serial.printf("Anchor MAC: %02x:%02x:%02x:%02x:%02x:%02x\n",
-                self_mac[0],self_mac[1],self_mac[2],
-                self_mac[3],self_mac[4],self_mac[5]);
+  Serial.printf("[Self] MAC %02x:%02x:%02x:%02x:%02x:%02x\n",
+                self_mac[0], self_mac[1], self_mac[2],
+                self_mac[3], self_mac[4], self_mac[5]);
 
-  // connect to Wi-Fi
-  connectWiFi();
+  // Initialize ESP-NOW
+  if (esp_now_init() != ESP_OK) {
+    Serial.println("Error: ESP-NOW init failed");
+    while (true) { delay(1000); }
+  }
+  esp_now_register_send_cb(onSent);
+  esp_now_register_recv_cb(onRecv);
 
-  // init UDP
-  udp.begin(0);
-  // Test UDP connectivity by sending a heartbeat
-  {
-    const char *testMsg = "{\"type\":\"heartbeat\"}";
-    if (udp.beginPacket(aggregatorIP, AGGREGATOR_PORT) == 1) {
-      udp.write((uint8_t*)testMsg, strlen(testMsg));
-      if (udp.endPacket() == 1) {
-        Serial.println("Confirmation: UDP heartbeat sent successfully");
-      } else {
-        Serial.println("Error: UDP heartbeat send failed");
-      }
+  // Add peers (exclude self)
+  for (size_t i = 0; i < NUM_PEERS; ++i) {
+    if (memcmp(self_mac, mesh_macs[i], 6) == 0) continue;
+    esp_now_peer_info_t peer;
+    memset(&peer, 0, sizeof(peer));
+    memcpy(peer.peer_addr, mesh_macs[i], 6);
+    peer.channel = 1;
+    peer.encrypt = false;
+    if (esp_now_add_peer(&peer) == ESP_OK) {
+      Serial.printf("[Peer] Added %02x:%02x:%02x:%02x:%02x:%02x\n",
+                    mesh_macs[i][0], mesh_macs[i][1], mesh_macs[i][2],
+                    mesh_macs[i][3], mesh_macs[i][4], mesh_macs[i][5]);
     } else {
-      Serial.println("Error: UDP heartbeat beginPacket failed");
+      Serial.printf("[Peer] Failed to add index %u\n", i);
     }
   }
 
-  // configure promiscuous sniffing
-  esp_wifi_set_promiscuous_rx_cb(&snifferCallback);
-  esp_wifi_set_promiscuous(true);
-  esp_wifi_set_channel(SNIFF_CHANNEL, WIFI_SECOND_CHAN_NONE);
-
-  Serial.println("Started RSSI anchor sniffing");
+  Serial.println("[Setup] Ready. Starting heartbeat...");
 }
 
 void loop() {
-  // nothing here; all handled in callback
-  delay(1000);
+  static uint32_t lastTs = 0;
+  uint32_t now = millis();
+  if (now - lastTs >= HEARTBEAT_INTERVAL) {
+    lastTs = now;
+    Heartbeat hb = { .ts = now };
+    for (size_t i = 0; i < NUM_PEERS; ++i) {
+      if (memcmp(self_mac, mesh_macs[i], 6) == 0) continue;
+      esp_err_t res = esp_now_send(mesh_macs[i], (uint8_t*)&hb, sizeof(hb));
+      if (res != ESP_OK) {
+        Serial.printf("[Error] Send to %u failed\n", i);
+      }
+    }
+  }
+  delay(100);
 }
