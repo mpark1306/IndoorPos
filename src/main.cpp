@@ -51,9 +51,19 @@ void snifferCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
            p.anchor_mac[0],p.anchor_mac[1],p.anchor_mac[2],
            p.anchor_mac[3],p.anchor_mac[4],p.anchor_mac[5],
            p.rssi, p.ts);
-  udp.beginPacket(aggregatorIP, AGGREGATOR_PORT);
+
+  // Begin UDP packet
+  if (udp.beginPacket(aggregatorIP, AGGREGATOR_PORT) != 1) {
+    Serial.println("Error: UDP beginPacket failed");
+    return;
+  }
   udp.write((uint8_t*)json, strlen(json));
-  udp.endPacket();
+  int res = udp.endPacket();
+  if (res == 1) {
+    Serial.println("Confirmation: Data sent to aggregator");
+  } else {
+    Serial.println("Error: UDP endPacket failed");
+  }
 }
 
 void connectWiFi() {
@@ -86,6 +96,20 @@ void setup() {
 
   // init UDP
   udp.begin(0);
+  // Test UDP connectivity by sending a heartbeat
+  {
+    const char *testMsg = "{\"type\":\"heartbeat\"}";
+    if (udp.beginPacket(aggregatorIP, AGGREGATOR_PORT) == 1) {
+      udp.write((uint8_t*)testMsg, strlen(testMsg));
+      if (udp.endPacket() == 1) {
+        Serial.println("Confirmation: UDP heartbeat sent successfully");
+      } else {
+        Serial.println("Error: UDP heartbeat send failed");
+      }
+    } else {
+      Serial.println("Error: UDP heartbeat beginPacket failed");
+    }
+  }
 
   // configure promiscuous sniffing
   esp_wifi_set_promiscuous_rx_cb(&snifferCallback);
