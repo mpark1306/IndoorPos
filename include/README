@@ -1,0 +1,34 @@
+# Indoor Positioning uden GPS
+
+## Formål
+Hvordan kan man bestemme, hvor en enhed befinder sig indendørs uden GPS? Kan vi f.eks. lave et heatmap, der viser antal personer i et område?
+
+## Produktmål
+- Ideelt: generate et heatmap baseret på indsamlede RSSI-værdier  
+- Minimum: proof-of-concept der indsamler og udgiver rå position estimates
+
+## Procesmål
+1. Research teknologier: RSSI, time-of-flight, ESP-Mesh, ESP-NOW  
+2. Implementér proof-of-concept for:
+   - RSSI-sniffing i promiscuous mode  
+   - Afstandsestimater mellem ESP32 units  
+   - Grundlæggende triangulering (multilateration)  
+3. Evaluer data-kvalitet og GDPR-implikationer
+
+## Hovedproblematikker
+- **Triangulering:** multilateration matematik  
+- **RSSI-indsamling:** WiFi promiscuous mode vs. ESP-NOW roundtrip  
+- **Kommunikation:** ESP-Mesh vs. ESP-NOW  
+- **Persondata/GDPR:** anonymisering af MAC, begræns dataopsamling
+
+## Teknologi-forslag
+- Start med WiFi promiscuous RSSI-sniffing  
+- Prøv ESP-NOW for roundtrip-målinger  
+- Undersøg om ESP-Mesh kører samtidig med sniffing  
+- Kryptering og anonymisering
+
+## Links
+- Indoor positioning overview: https://www.bitbrain.com/blog/indoor-positioning-system  
+- Matematik (multilateration): https://link.springer.com/article/10.1186/s13673-020-00236-8  
+- GDPR guide for developers: https://pentests.dk/docs/gdpr-developers-guide/  
+- Original (engelsk): https://github.com/LINCnil/GDPR-Developer-Guide
