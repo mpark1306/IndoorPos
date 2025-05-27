@@ -102,7 +102,7 @@ esp_wifi_set_channel(primary_chan, WIFI_SECOND_CHAN_NONE);
     esp_now_peer_info_t peer;
     memset(&peer, 0, sizeof(peer));
     memcpy(peer.peer_addr, mesh_macs[i], 6);
-    peer.channel = 1;
+    peer.channel = primary_chan;
     peer.encrypt = false;
     if (esp_now_add_peer(&peer) == ESP_OK) {
       Serial.printf("[Peer] Added %02x:%02x:%02x:%02x:%02x:%02x\n",
