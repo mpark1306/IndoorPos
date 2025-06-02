@@ -20,7 +20,7 @@ n = 2.0    # path-loss exponent
 # UDP listener configuration
 UDP_IP = '192.168.0.205'   # listen only on this PC's IP
 UDP_PORT = 5005
-BUFFER_TIME = 2.0  # seconds window
+BUFFER_TIME = 1.0  # seconds window
 
 # Thread-safe buffer to store incoming readings
 data_buffer = []
