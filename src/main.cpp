@@ -12,7 +12,7 @@
 #define WIFI_PASS  "98806829"
 
 // Aggregator server details (UDP)
-IPAddress aggregatorIP(192, 168, 0, 205);  // TODO: set your server IP
+IPAddress aggregatorIP(192, 168, 0, 204);  // TODO: set your server IP
 const uint16_t AGG_PORT = 5005;
 
 // Channel to sniff on
